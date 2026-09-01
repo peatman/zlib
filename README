@@ -1,5 +1,16 @@
 ZLIB DATA COMPRESSION LIBRARY
 
+
+Local modifications (for peat):
+
+  Windows read/write. File I/O in gzguts.h, gzlib.c, gzread.c and gzwrite.c was
+  changed from POSIX open()/read()/write()/close() to native Windows
+  CreateFile()/ReadFile()/WriteFile()/CloseHandle() (guarded by
+  `defined(_WIN32) && !defined(__MINGW32__)`), including a native
+  SetFilePointer()-based LSEEK() replacement. This eliminates the CRT's
+  8192 open file handle limit on Windows. 
+
+
 zlib 1.3.2.1 is a general purpose data compression library.  All the code is
 thread safe (though see the FAQ for caveats).  The data format used by the zlib
 library is described by RFCs (Request for Comments) 1950 to 1952 at

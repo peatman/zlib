@@ -36,9 +36,11 @@
 #  include <stdlib.h>
 #  include <limits.h>
 #endif
-
-#ifndef _POSIX_C_SOURCE
-#  define _POSIX_C_SOURCE 200112L
+#if defined(_WIN32) && !defined(__MINGW32__)
+#include <windows.h>
+#endif
+#ifndef _POSIX_SOURCE
+#  define _POSIX_SOURCE
 #endif
 #include <fcntl.h>
 
@@ -175,7 +177,15 @@ typedef struct {
                             /* x.pos: current position in uncompressed data */
         /* used for both reading and writing */
     int mode;               /* see gzip modes above */
+#if defined(_WIN32) && !defined(__MINGW32__)
+    HANDLE fd;                 /* file descriptor */
+    int crtfd;               /* CRT descriptor fd was opened from via gzdopen,
+                                 -1 if fd owns its own HANDLE (must close via
+                                 that CRT fd, not CloseHandle -- see
+                                 _get_osfhandle docs) */
+#else
     int fd;                 /* file descriptor */
+#endif
     char *path;             /* path or fd for error messages */
     unsigned size;          /* buffer size, zero if not allocated yet */
     unsigned want;          /* requested buffer size, default is GZBUFSIZE */

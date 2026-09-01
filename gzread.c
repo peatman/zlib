@@ -17,7 +17,10 @@
    signaled from read().  *have is set to the number of bytes read. */
 local int gz_load(gz_statep state, unsigned char *buf, unsigned len,
                   unsigned *have) {
-    int ret;
+    int ret; 
+#if defined(_WIN32) && !defined(__MINGW32__)
+    BOOL rf;
+#endif
     unsigned get, max = ((unsigned)-1 >> 2) + 1;
 
     state->again = 0;
@@ -27,7 +30,19 @@ local int gz_load(gz_statep state, unsigned char *buf, unsigned len,
         get = len - *have;
         if (get > max)
             get = max;
-        ret = (int)read(state->fd, buf + *have, get);
+#if defined(_WIN32) && !defined(__MINGW32__)
+//        BOOL ReadFile(
+//            [in]                HANDLE       hFile,
+//            [out]               LPVOID       lpBuffer,
+//            [in]                DWORD        nNumberOfBytesToRead,
+//            [out, optional]     LPDWORD      lpNumberOfBytesRead,
+//            [in, out, optional] LPOVERLAPPED lpOverlapped
+//        );
+        rf=ReadFile(state->fd, buf + *have, get, &ret, NULL);
+        if (!rf) ret = -1;
+#else
+        ret = read(state->fd, buf + *have, get);
+#endif
         if (ret <= 0)
             break;
         *have += (unsigned)ret;
@@ -662,7 +677,13 @@ int ZEXPORT gzclose_r(gzFile file) {
     err = state->err == Z_BUF_ERROR ? Z_BUF_ERROR : Z_OK;
     gz_error(state, Z_OK, NULL);
     free(state->path);
+#if defined(_WIN32) && !defined(__MINGW32__)
+    /* the HANDLE from gzdopen() is owned by its CRT fd -- must not
+       CloseHandle() it directly (see _get_osfhandle documentation) */
+    ret = state->crtfd > -1 ? _close(state->crtfd) : !CloseHandle(state->fd);
+#else
     ret = close(state->fd);
+#endif
     free(state);
     return ret ? Z_ERRNO : err;
 }

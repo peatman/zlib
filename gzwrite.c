@@ -65,6 +65,10 @@ local int gz_init(gz_statep state) {
 local int gz_comp(gz_statep state, int flush) {
     int ret, writ;
     unsigned have, put, max = ((unsigned)-1 >> 2) + 1;
+#if defined(_WIN32) && !defined(__MINGW32__)
+    BOOL rf;
+#endif
+
     z_streamp strm = &(state->strm);
 
     /* allocate memory if this is the first time through */
@@ -77,7 +81,12 @@ local int gz_comp(gz_statep state, int flush) {
             errno = 0;
             state->again = 0;
             put = strm->avail_in > max ? max : strm->avail_in;
-            writ = (int)write(state->fd, strm->next_in, put);
+#if defined(_WIN32) && !defined(__MINGW32__)
+            rf = WriteFile(state->fd, strm->next_in, put, &writ, NULL);
+            if (!rf) writ = -1;
+#else
+            writ = write(state->fd, strm->next_in, put);
+#endif
             if (writ < 0) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
                     state->again = 1;
@@ -112,7 +121,12 @@ local int gz_comp(gz_statep state, int flush) {
                 state->again = 0;
                 put = strm->next_out - state->x.next > (int)max ? max :
                       (unsigned)(strm->next_out - state->x.next);
-                writ = (int)write(state->fd, state->x.next, put);
+#if defined(_WIN32) && !defined(__MINGW32__)
+                rf = WriteFile(state->fd, state->x.next, put, &writ, NULL);
+                if (!rf) writ = -1;
+#else
+                writ = write(state->fd, state->x.next, put);
+#endif
                 if (writ < 0) {
                     if (errno == EAGAIN || errno == EWOULDBLOCK)
                         state->again = 1;
@@ -694,7 +708,13 @@ int ZEXPORT gzclose_w(gzFile file) {
     }
     gz_error(state, Z_OK, NULL);
     free(state->path);
+#if defined(_WIN32) && !defined(__MINGW32__)
+    /* the HANDLE from gzdopen() is owned by its CRT fd -- must not
+       CloseHandle() it directly (see _get_osfhandle documentation) */
+    if (state->crtfd > -1 ? _close(state->crtfd) == -1 : !CloseHandle(state->fd))
+#else
     if (close(state->fd) == -1)
+#endif
         ret = Z_ERRNO;
     free(state);
     return ret;

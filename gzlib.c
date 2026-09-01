@@ -5,14 +5,24 @@
 
 #include "gzguts.h"
 
-#if defined(__DJGPP__)
-#  define LSEEK llseek
-#elif defined(_WIN32) && !defined(__BORLANDC__) && !defined(UNDER_CE)
+#if defined(_WIN32) && !defined(__MINGW32__)
+__int64  LSEEK(HANDLE f, __int64 pointer, int origin)
+{
+    long hp = pointer>>32;
+    long p = pointer & ((((__int64)(1)) << 32) - 1);
+    long r=SetFilePointer(f, p, &hp, origin);
+    return (((__int64) hp) << 32) + r;
+}
+#else
+#if defined(_WIN32) && !defined(__BORLANDC__)
 #  define LSEEK _lseeki64
-#elif defined(_LARGEFILE64_SOURCE) && _LFS64_LARGEFILE-0
+#else
+#if defined(_LARGEFILE64_SOURCE) && _LFS64_LARGEFILE-0
 #  define LSEEK lseek64
 #else
 #  define LSEEK lseek
+#endif
+#endif
 #endif
 
 #if defined UNDER_CE
@@ -87,7 +97,10 @@ local void gz_reset(gz_statep state) {
 local gzFile gz_open(const void *path, int fd, const char *mode) {
     gz_statep state;
     z_size_t len;
-    int oflag = 0;
+    int oflag,oaccess,oexcl;
+#ifdef O_CLOEXEC
+    int cloexec = 0;
+#endif
 #ifdef O_EXCL
     int exclusive = 0;
 #endif
@@ -226,7 +239,53 @@ local gzFile gz_open(const void *path, int fd, const char *mode) {
     }
 
     /* compute the flags for open() */
-    oflag |=
+
+    /* open the file with the appropriate flags (or just use fd) */
+#if defined(_WIN32) && !defined(__MINGW32__)
+
+
+//    HANDLE CreateFileA(
+//        [in]           LPCSTR                lpFileName,
+//        [in]           DWORD                 dwDesiredAccess,
+//        [in]           DWORD                 dwShareMode,
+//        [in, optional] LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+//        [in]           DWORD                 dwCreationDisposition,
+//        [in]           DWORD                 dwFlagsAndAttributes,
+//        [in, optional] HANDLE                hTemplateFile
+//    );
+    oaccess =
+        (state->mode == GZ_READ) ?
+        GENERIC_READ :
+        GENERIC_WRITE;
+    oflag =
+        (state->mode == GZ_READ) ?
+        OPEN_EXISTING :
+        CREATE_ALWAYS;
+#ifdef O_EXCL
+    if (exclusive) oexcl = 0; else oexcl = FILE_SHARE_READ ; //allow reads 
+#endif
+    if (fd > -1) {
+        /* reuse an already-open native file descriptor (e.g. from gzdopen);
+           its HANDLE is owned by the CRT, so remember fd to close it later
+           via _close() instead of CloseHandle() */
+        state->crtfd = fd;
+        state->fd = (HANDLE)_get_osfhandle(fd);
+    }
+    else if (fd == -2) {
+        state->crtfd = -1;
+        state->fd = CreateFileW(path, oaccess, oexcl, NULL, oflag, FILE_ATTRIBUTE_NORMAL, NULL);
+    }  else {
+        state->crtfd = -1;
+        state->fd = CreateFileA(path, oaccess, oexcl, NULL, oflag, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
+    if (state->fd == INVALID_HANDLE_VALUE) {
+        free(state->path);
+        free(state);
+        return NULL;
+    }
+
+#else
+    oflag =
 #ifdef O_LARGEFILE
         O_LARGEFILE |
 #endif
@@ -266,6 +325,7 @@ local gzFile gz_open(const void *path, int fd, const char *mode) {
         free(state);
         return NULL;
     }
+#endif
     if (state->mode == GZ_APPEND) {
         LSEEK(state->fd, 0, SEEK_END);  /* so gzoffset() is correct */
         state->mode = GZ_WRITE;         /* simplify later checks */
@@ -298,7 +358,6 @@ gzFile ZEXPORT gzopen64(const char *path, const char *mode) {
 gzFile ZEXPORT gzdopen(int fd, const char *mode) {
     char *path;         /* identifier for error messages */
     gzFile gz;
-
     if (fd == -1 || (path = (char *)malloc(7 + 3 * sizeof(int))) == NULL)
         return NULL;
 #if !defined(NO_snprintf) && !defined(NO_vsnprintf)
