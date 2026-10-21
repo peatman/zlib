@@ -48,7 +48,7 @@ local int gz_load(gz_statep state, unsigned char *buf, unsigned len,
         *have += (unsigned)ret;
     } while (*have < len);
     if (ret < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        if (BLOCKED(errno)) {
             state->again = 1;
             if (*have != 0)
                 return 0;
@@ -140,6 +140,13 @@ local int gz_look(gz_statep state) {
        if we're looking for a gzip member after the first one, which is not at
        the start, then proceed directly to look for a gzip member next */
     if (state->direct == -1 || state->junk == 0) {
+        /* wait for input before committing to another gzip member */
+        if (state->junk == 0 && strm->avail_in == 0) {
+            if (gz_avail(state) == -1)
+                return -1;
+            if (strm->avail_in == 0)
+                return 0;
+        }
         inflateReset(strm);
         state->how = GZIP;
         state->junk = state->junk != -1;
@@ -310,8 +317,11 @@ local int gz_skip(gz_statep state) {
         }
 
         /* output buffer empty -- return if we're at the end of the input */
-        else if (state->eof && state->strm.avail_in == 0)
+        else if (state->eof && state->strm.avail_in == 0) {
+            if (state->how == GZIP && state->err == Z_OK)
+                gz_error(state, Z_BUF_ERROR, "unexpected end of file");
             break;
+        }
 
         /* need more data to skip -- load up output buffer */
         else {
@@ -364,8 +374,11 @@ local z_size_t gz_read(gz_statep state, voidp buf, z_size_t len) {
         }
 
         /* output buffer empty -- return if we're at the end of the input */
-        else if (state->eof && state->strm.avail_in == 0)
+        else if (state->eof && state->strm.avail_in == 0) {
+            if (state->how == GZIP && state->err == Z_OK)
+                gz_error(state, Z_BUF_ERROR, "unexpected end of file");
             break;
+        }
 
         /* need output data -- for small len or new stream load up our output
            buffer, so that gzgetc() can be fast */
@@ -421,7 +434,8 @@ int ZEXPORT gzread(gzFile file, voidp buf, unsigned len) {
     /* check that there was no (serious) error */
     if (state->err != Z_OK && state->err != Z_BUF_ERROR && !state->again)
         return -1;
-    gz_error(state, Z_OK, NULL);
+    if (state->again)
+        gz_error(state, Z_OK, NULL);
 
     /* since an int is returned, make sure len fits in one, otherwise return
        with an error (this avoids a flaw in the interface) */
@@ -466,7 +480,8 @@ z_size_t ZEXPORT gzfread(voidp buf, z_size_t size, z_size_t nitems,
     /* check that there was no (serious) error */
     if (state->err != Z_OK && state->err != Z_BUF_ERROR && !state->again)
         return 0;
-    gz_error(state, Z_OK, NULL);
+    if (state->again)
+        gz_error(state, Z_OK, NULL);
 
     /* compute bytes to read -- error on overflow */
     len = nitems * size;
@@ -499,7 +514,8 @@ int ZEXPORT gzgetc(gzFile file) {
     /* check that there was no (serious) error */
     if (state->err != Z_OK && state->err != Z_BUF_ERROR && !state->again)
         return -1;
-    gz_error(state, Z_OK, NULL);
+    if (state->again)
+        gz_error(state, Z_OK, NULL);
 
     /* try output buffer (no need to check for skip request) */
     if (state->x.have) {
@@ -534,7 +550,8 @@ int ZEXPORT gzungetc(int c, gzFile file) {
     /* check that there was no (serious) error */
     if (state->err != Z_OK && state->err != Z_BUF_ERROR && !state->again)
         return -1;
-    gz_error(state, Z_OK, NULL);
+    if (state->again)
+        gz_error(state, Z_OK, NULL);
 
     /* process a skip request */
     if (state->skip && gz_skip(state) == -1)
@@ -595,7 +612,8 @@ char * ZEXPORT gzgets(gzFile file, char *buf, int len) {
     /* check that there was no (serious) error */
     if (state->err != Z_OK && state->err != Z_BUF_ERROR && !state->again)
         return NULL;
-    gz_error(state, Z_OK, NULL);
+    if (state->again)
+        gz_error(state, Z_OK, NULL);
 
     /* process a skip request */
     if (state->skip && gz_skip(state) == -1)
